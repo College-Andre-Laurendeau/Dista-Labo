@@ -1,0 +1,29 @@
+pip3 install vidgear
+pip3 intall nanocamera
+pip3 install webcolors
+
+sudo apt-get install libjpeg-dev zlib1g-dev libpython3-dev libavcodec-dev libavformat-dev libswscale-dev
+git clone --branch v0.9.0 https://github.com/pytorch/vision torchvision
+cd torchvision
+export BUILD_VERSION=0.9.0 
+python3 setup.py install
+
+# voir https://forums.developer.nvidia.com/t/pytorch-for-jetson-version-1-9-0-now-available/72048
+
+
+# info pour git 
+username : christiantheriault
+token (password) : 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
+
+
+git checkout master
+git pull
+
+
+#test
+
+python3 detection.py --opencv --usb --resolution=NANO --catego=car,cellphone,mouse --view_2dbox --sn=1000 --linuxid=0,1 --yolo4  --displaydistance --rectifydown=1 --vflip=1,1 --hflip=1,1 --justdetec
+
+python3 detection.py --opencv --usb --resolution=NANO --catego=car,cellphone,mouse --view_2dbox --sn=1000 --linuxid=0,1 --yolo4  --displaydistance --rectifydown=1 --vflip=1,1 --hflip=1,1
+
+python3 detection.py --opencv --usb --resolution=NANO --catego=car,cellphone,mouse --view_2dbox --sn=1000 --linuxid=0,1 --yolo4  --displaydistance --rectifydown=1 --vflip=1,1 --hflip=1,1 --arrows

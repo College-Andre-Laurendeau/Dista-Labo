@@ -1,0 +1,23 @@
+{
+    "cameraIndexes": [
+        "/dev/video0",
+        "/dev/video1"
+    ],
+    "serial": "SNTEST1",
+    "fishEye": false,
+    "squareSize": 36.2,
+    "resolution": "NANO",
+    "isCsiCam": true,
+    "boardShape": [
+        9,
+        6
+    ],
+    "leftCamera": {
+        "vFlip": true,
+        "hFlip": true
+    },
+    "rightCamera": {
+        "vFlip": true,
+        "hFlip": true
+    }
+}
