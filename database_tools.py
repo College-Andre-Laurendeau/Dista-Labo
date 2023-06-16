@@ -96,7 +96,7 @@ def load_cameras(args, database):
                 cur.execute(
                     "INSERT INTO Cameras (serial, resolution) VALUES (%s, %s)" % (dbp*2),
                     (sn, args.resolution))
-        serial_numbers.append(int(sn))
+        serial_numbers.append(sn)
     
     if not serial_numbers :
         # Load all cameras and machines from database (ie. restore last configuration)

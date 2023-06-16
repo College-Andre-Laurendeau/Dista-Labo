@@ -24,9 +24,9 @@ def get_fonts_and_padding_from_resolution(resolution_str):
     elif resolution_str == 'HD':
         fontscale = 1
     elif resolution_str == 'FHD':
-        fontscale = 0.5
+        fontscale = 1.3
     elif resolution_str == '2K':
-        fontscale = 1
+        fontscale = 1.5
 
     return fontscale
 
@@ -127,16 +127,16 @@ def display_image(args, i, cap):
 
 ################################################################################
 def draw_2d_box(cap, bounding_box_2d, obj_list, fontscale, k):
-    if cap.detectionconfidence[k] >= 0.4:
-        color = (255, 255, 0)
-    else:
-        color = (255, 255, 0)
+    #if cap.detectionconfidence[k] >= 0.4:
+    color = (255, 255, 0)
+    #else:
+    #    color = (0, 0, 255)
     cv2.rectangle(cap.image_to_display, (int(bounding_box_2d[0, 0]), int(bounding_box_2d[0, 1])),
                   (int(bounding_box_2d[2, 0]), int(bounding_box_2d[2, 1])),
-                  color, 3)  # 3
+                  color, 2)  # 3
 
     font_face = cv2.FONT_HERSHEY_DUPLEX
-    font_scale = 2 * fontscale
+    font_scale = 1 * fontscale
     font_thickness = 1  # 1
     if args.tracking:
         text_str = 'ID :' + str(cap.trackingids[k])
@@ -153,18 +153,22 @@ def draw_2d_box(cap, bounding_box_2d, obj_list, fontscale, k):
 ################################################################################
 def display_distances_on_image(image_data, bounding_box_2d, position, fontscale):
     font_face = cv2.FONT_HERSHEY_DUPLEX
-    font_scale = fontscale * 2
+    font_scale = fontscale * 1
     font_thickness = 2
     #                     coins N-O et S-E de la fenêtre 2D
     upperleftcorner = (int(bounding_box_2d[0, 0]), int(bounding_box_2d[0, 1]))
     lowerrightcorner = (int(bounding_box_2d[2, 0]), int(bounding_box_2d[2, 1]))
+    lowerleftcorner = (int(bounding_box_2d[3, 0]), int(bounding_box_2d[3, 1]))
     # milieu de la fenètre 2D
-    middle_row = int(np.round((upperleftcorner[0] + lowerrightcorner[0]) / 2))
-    middle_col = int(np.round((upperleftcorner[1] + lowerrightcorner[1]) / 2))
-    text_pt4 = (middle_row, middle_col)
+    #middle_row = int(np.round((upperleftcorner[0] + lowerrightcorner[0]) / 2))
+    #middle_col = int(np.round((upperleftcorner[1] + lowerrightcorner[1]) / 2))
+    #text_pt4 = (middle_row, middle_col)
 
     text_str4 = ' %.2fm' % np.around(
         np.sqrt(np.power(position[0], 2) + np.power(position[1], 2) + np.power(position[2], 2)), 2)
+
+    text_w, text_h = cv2.getTextSize(text_str4, font_face, font_scale, font_thickness)[0]
+    text_pt4 = (int(bounding_box_2d[3, 0]), int(bounding_box_2d[3, 1]) +  int(text_h))
 
     cv2.putText(image_data, text_str4, text_pt4, font_face, font_scale, (0, 0, 255), font_thickness)  # cv2.LINE_AA
 
@@ -220,21 +224,19 @@ def write_detections_on_image(args, cap, obj_cat_id, obj_list):
                     if args.view_3dbox : dimensions = np.copy(cap[i].object_dimensions[k])
                     if args.view_3dbox : bounding_box = np.copy(cap[i].object_3d_boxes[k])
                     
+                    #if not np.isnan(np.linalg.norm(position)):
         
                     ####################################################################
                     # DRAW 2D BOUNDING BOX
                     if args.mirror == True:
                         bounding_box_2d[:, 0] = w - bounding_box_2d[:, 0]
-        
+
                     if args.view_2dbox:
                         draw_2d_box(cap[i], bounding_box_2d, obj_list, fontscale, k)
                     #                          if len(cap[i].nexttracking2dbox)!=0:
                     #                              for i in range(len(cap[i].nexttracking2dbox)):
                     #                                  draw_2d_box(cap[i],cap[i].nexttracking2dbox[i],obj_list,fontscale,k)
- 
-
-                    if not np.isnan(np.linalg.norm(position)):
-           
+            
                         ####################################################################
                         # DISPLAY DISTANCES AND POSITION ON IMAGE AND SIDE PANEL
                         if args.displaydistance:
@@ -326,7 +328,6 @@ def display_arrows(cap, lineupmode, lineupdepth, maxdist, \
 
     # LOOP OVER ALL DETECTION/PERSONS
 
-
     for i in range(0, distmat.shape[0]):
         
         if not np.isnan(np.linalg.norm(cap.object_center_positions[i])):
@@ -346,41 +347,42 @@ def display_arrows(cap, lineupmode, lineupdepth, maxdist, \
             # LOOP OVER ALL NEIGHBOORS
     
             for j in range(0, len(sortdist)):  # if draw to closest neighboors only
-    
+
                 target_id = sortdist[j]
-#                obj_h = cap.object_dimensions[i][1]
-#                target_h = cap.object_dimensions[target_id][1]
-#                obj_w = cap.object_dimensions[i][0]
-#                target_w = cap.object_dimensions[target_id][0]
-#                obj_d = cap.object_dimensions[i][2]
-#                target_d = cap.object_dimensions[target_id][2]
+                #obj_h = cap.object_dimensions[i][1]
+                #target_h = cap.object_dimensions[target_id][1]
+                # obj_w = cap.object_dimensions[i][0]
+                # target_w = cap.object_dimensions[target_id][0]
+                # obj_d = cap.object_dimensions[i][2]
+                # target_d = cap.object_dimensions[target_id][2]
                 obj_z = cap.object_center_positions[i][2]
                 target_z = cap.object_center_positions[target_id][2]
-    
-                if distmat[i, target_id] < 1.95 and abs(
-                        obj_z - target_z) < lineupdepth :#and obj_h > minheight and target_h > minheight and obj_w > minwidth and target_w > minwidth and obj_d > mindepth and target_d > mindepth:
+
+                if distmat[i, target_id] < 1.95 and distmat[i, target_id] < maxdist : #and obj_z < maxdepth and target_z < maxdepth :#and obj_h > minheight and target_h > minheight and obj_w > minwidth and target_w > minwidth and obj_d > mindepth and target_d > mindepth:
                     midarrow = imgpts[i] + (imgpts[target_id] - imgpts[i]) / 2
-    
-                    text_pt = (int(midarrow[0]), int(midarrow[1] - 20))
                     text_str = str(np.round(distmat[i, target_id], 2))
                     font_face = cv2.FONT_HERSHEY_DUPLEX
                     thick = 3
                     font_scale = fontscale
                     font_thickness = 1
+                    text_w, text_h = cv2.getTextSize(text_str, font_face, font_scale, font_thickness)[0]
+                    text_pt = (int(midarrow[0]), int(midarrow[1] + text_h+15))
+
                     cv2.putText(image_data, text_str, text_pt, font_face, font_scale, [0, 0, 255], font_thickness,
                                 cv2.LINE_AA)
                     cv2.line(image_data, tuple(imgpts[i].ravel()), tuple(imgpts[target_id].ravel()), [0, 0, 255],
                              int(thick))
     
-                if distmat[i, target_id] >= 2 and distmat[i, target_id] < maxdist and abs(
-                        obj_z - target_z) < lineupdepth :#and obj_h > minheight and target_h > minheight and obj_w > minwidth and target_w > minwidth and obj_d > mindepth and target_d > mindepth:
+                if distmat[i, target_id] >= 2 and distmat[i, target_id] < maxdist : # and obj_z < maxdepth and target_z < maxdepth :#and obj_h > minheight and target_h > minheight and obj_w > minwidth and target_w > minwidth and obj_d > mindepth and target_d > mindepth:
                     midarrow = imgpts[i] + (imgpts[target_id] - imgpts[i]) / 2
-                    thick = 3
-                    text_pt = (int(midarrow[0]), int(midarrow[1] - 20))
                     text_str = str(np.round(distmat[i, target_id], 2))
                     font_face = cv2.FONT_HERSHEY_DUPLEX
                     font_scale = fontscale
                     font_thickness = 1
+                    text_w, text_h = cv2.getTextSize(text_str, font_face, font_scale, font_thickness)[0]
+                    thick = 3
+                    text_pt = (int(midarrow[0]), int(midarrow[1] + text_h+15))
+
                     cv2.putText(image_data, text_str, text_pt, font_face, font_scale, [0, 255, 255], font_thickness,
                                 cv2.LINE_AA)
                     cv2.line(image_data, tuple(imgpts[i].ravel()), tuple(imgpts[target_id].ravel()), [0, 255, 255],
@@ -405,11 +407,10 @@ def display_and_record(args, capList):
 #    h = args.window_height
 #    cv2.resizeWindow(windowName, (int(w*resizefactor), int(h*resizefactor)))
 
-
     #  Scan all pictures
     for i in range(camCount):
-        if not args.mmcam and not args.nanocam and not args.ipcam:
-            capList[i].showDebug()
+        #if not args.mmcam and not args.nanocam:
+        #    capList[i].showDebug()
             # Display the picture with the box (computation result)
         image = capList[i].image_to_display
 
@@ -457,6 +458,9 @@ def display_and_record(args, capList):
     
     cv2.waitKey(1)
     cv2.imshow(windowName, finalPicture)
+    #cv2.imshow(windowName, capList[0].disparity_to_display)
+
+
 
 
 def display_avg_obj_count(frame, displayWidth, avg):

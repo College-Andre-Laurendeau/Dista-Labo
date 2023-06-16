@@ -44,7 +44,7 @@ def initalize_all_cameras(serial_numbers, ip_addresses, cam_ports):
 
     for i in range(len(serial_numbers)):
 
-        serial_number = int(serial_numbers[i])
+        serial_number = serial_numbers[i]
 
 
 

@@ -220,9 +220,102 @@ def transform_compose(image, inputsize):
 #    canvaslefts=pool.map( preprocessvideo, images )
 #    return canvaslefts
 
+def quandrant_box_adjust(model,args,imw,imh,transformed_anchors, i):
+    # shift and scale boxes for all subimages in each quadrant : no shift for subimage 0
+    # scale boxes to image size
+    scale_factor = imw / model.input_size
+    # shift boxes according to quadrant
+    transformed_anchors*= scale_factor
+    m, n = np.unravel_index(i, (model.imsplit, model.imsplit))
+    transformed_anchors[:, 0] += max(0,n * imw - 2*args.overlap) #n * imw
+    transformed_anchors[:, 2] += max(0,n * imw - 2*args.overlap) #n * imw
+    transformed_anchors[:, 1] += max(0,m * imh - 2*args.overlap) #m * imh
+    transformed_anchors[:, 3] += max(0,m * imh - 2*args.overlap) #m * imh
+
+    return transformed_anchors
+
+def postprocess(model, args, x, imw,imh ,anchors, regression, classification, regressBoxes, clipBoxes):
+
+    threshold =  model.detection_threshold
+    iou_threshold = model.nonmax_threshold
+    transformed_anchors = regressBoxes(anchors, regression)
+    transformed_anchors = clipBoxes(transformed_anchors, x)
+
+    scores = torch.max(classification, dim=2, keepdim=True)[0]
+    scores_over_thresh = (scores > threshold)[:, :, 0]
+
+    for i in range(transformed_anchors.shape[0]):
+        transformed_anchors[i] = quandrant_box_adjust(model,args,imw,imh, transformed_anchors[i], i % model.imsplit**2)
+
+    s_transformed_anchors = torch.split(transformed_anchors, model.imsplit**2, dim=0)
+    s_scores = torch.split(scores, model.imsplit**2, dim=0)
+    s_classification = torch.split(classification, model.imsplit**2, dim=0)
+    s_scores_over_thresh = torch.split(scores_over_thresh, model.imsplit**2, dim=0)
+
+    tmp_anchors = []
+    tmp_scores = []
+    tmp_classification = []
+    tmp_scores_over_thresh = []
+    for k in range(len(s_transformed_anchors)):
+        tmp_anchors.append(s_transformed_anchors[k][0])
+        tmp_scores.append(s_scores[k][0])
+        tmp_classification.append(s_classification[k][0])
+        tmp_scores_over_thresh.append(s_scores_over_thresh[k][0])
+
+        for i in range(1,model.imsplit**2):
+            tmp_anchors[k] = torch.cat((tmp_anchors[k], s_transformed_anchors[k][i]),dim=0)
+            tmp_scores[k] = torch.cat((tmp_scores[k], s_scores[k][i]),dim=0)
+            tmp_classification[k] = torch.cat((tmp_classification[k], s_classification[k][i]),dim=0)
+            tmp_scores_over_thresh[k] = torch.cat((tmp_scores_over_thresh[k], s_scores_over_thresh[k][i]),dim=0)
+
+    transformed_anchors = torch.stack([fi for fi in tmp_anchors], 0)
+    scores = torch.stack([fi for fi in tmp_scores], 0)
+    classification = torch.stack([fi for fi in tmp_classification], 0)
+    scores_over_thresh = torch.stack([fi for fi in tmp_scores_over_thresh], 0)
 
 
-def postprocess(x, anchors, regression, classification, regressBoxes, clipBoxes, threshold, iou_threshold):
+    out = []
+    #for i in range(x.shape[0]):
+    for i in range(transformed_anchors.shape[0]):
+
+        if scores_over_thresh[i].sum() == 0:
+            out.append({
+                'rois': np.array(()),
+                'class_ids': np.array(()),
+                'scores': np.array(()),
+            })
+            continue
+
+
+        classification_per = classification[i, scores_over_thresh[i, :], ...].permute(1, 0)
+        transformed_anchors_per = transformed_anchors[i, scores_over_thresh[i, :], ...]
+        scores_per = scores[i, scores_over_thresh[i, :], ...]
+
+        scores_, classes_ = classification_per.max(dim=0)
+        anchors_nms_idx = batched_nms(transformed_anchors_per, scores_per[:, 0], classes_, iou_threshold=iou_threshold)
+
+        if anchors_nms_idx.shape[0] != 0:
+            classes_ = classes_[anchors_nms_idx]
+            scores_ = scores_[anchors_nms_idx]
+            boxes_ = transformed_anchors_per[anchors_nms_idx, :]
+
+            out.append({
+                'rois': boxes_.cpu().numpy(),
+                'class_ids': classes_.cpu().numpy(),
+                'scores': scores_.cpu().numpy(),
+            })
+        else:
+            out.append({
+                'rois': np.array(()),
+                'class_ids': np.array(()),
+                'scores': np.array(()),
+            })
+
+    return out
+
+
+
+def original_postprocess(x, anchors, regression, classification, regressBoxes, clipBoxes, threshold, iou_threshold):
     transformed_anchors = regressBoxes(anchors, regression)
     transformed_anchors = clipBoxes(transformed_anchors, x)
     scores = torch.max(classification, dim=2, keepdim=True)[0]

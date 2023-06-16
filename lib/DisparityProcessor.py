@@ -12,7 +12,8 @@ import numpy
 from lib.Calibration import Calibration
 from lib.RectifiedCamera import RectifiedCamera
 from zedgetrectifty import init_calibration
-
+from config import *
+args = parse_args()
 
 class DisparityProcessor:
     DEFAULT_WINDOW_NAME = 'Disparity Map'
@@ -29,6 +30,7 @@ class DisparityProcessor:
         # Camera Rectification
         self.rectifiedLeft = None
         self.rectifiedRight = None
+        self.NETrectifiedLeft = None
         self.disparityMap = None
         self.depthMap = None
         self.calibration = self.getCoefficientFromConfigFile()
@@ -38,9 +40,11 @@ class DisparityProcessor:
         self.usefastBilateral = True
 
         # CREATION STEREO MATCHERS -------------------------------------------------
-        self.num_disp = 5 * 16
+        #self.num_disp = 5 * 16
+        self.num_disp = int(10 * 16 / (self.disparityDownScale * args.rectifydown))
         min_disp = 1
         blockSize = 5
+        #self.left_matcher = cv2.StereoBM_create(numDisparities=self.num_disp, blockSize=blockSize)
         self.left_matcher = cv2.StereoSGBM_create(
             minDisparity=min_disp,
             numDisparities=self.num_disp,
@@ -80,7 +84,7 @@ class DisparityProcessor:
         else:
             # Old file format
             width, height = self.imageSize[0], self.imageSize[1]
-            cameraMatrix_left, cameraMatrix_right, map_left_x, map_left_y, map_right_x, map_right_y,T,R,distCoeffs_left, distCoeffs_right, R1 ,left_cam_cx,left_cam_cy,right_cam_cx,left_cam_fx,left_cam_fy,Q = \
+            cameraMatrix_left, cameraMatrix_right, map_left_x, map_left_y, map_right_x, map_right_y,netmap_left_x, netmap_left_y,T,R,distCoeffs_left, distCoeffs_right, R1 ,R2,left_cam_cx,left_cam_cy,right_cam_cx,left_cam_fx,left_cam_fy,Q = \
                 init_calibration(self.configFileName, width, height, self.resolution)
             # Adjust scale
             T = T.flatten()
@@ -96,8 +100,8 @@ class DisparityProcessor:
             settings['R'] = R.tolist()
 
             self.rectifiedLeft = RectifiedCamera(cameraMatrix_left, distCoeffs_left, R1, cameraMatrix_left, map_left_x, map_left_y, Q)
-            self.rectifiedRight = RectifiedCamera(cameraMatrix_right, distCoeffs_right, R1, cameraMatrix_right, map_right_x, map_right_y, Q)
-
+            self.rectifiedRight = RectifiedCamera(cameraMatrix_right, distCoeffs_right, R2, cameraMatrix_right, map_right_x, map_right_y, Q)
+            self.net_rectifiedLeft = RectifiedCamera(cameraMatrix_left, distCoeffs_left, R1, cameraMatrix_left, netmap_left_x, netmap_left_y, Q)
             return Calibration(settings)
         return None
 
@@ -115,21 +119,35 @@ class DisparityProcessor:
         R = numpy.array(self.calibration.getR())
         imageSize = self.calibration.getImageSize()
         height, width = imageSize[1], imageSize[0]
+        downscale=args.rectifydown  # to downscale rectified image
 
         # Computes rectification transforms for each head of a calibrated stereo camera.
         R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(cameraMatrix1=cameraMatrix1, cameraMatrix2=cameraMatrix2,
                                                     distCoeffs1=distCoeffs1, distCoeffs2=distCoeffs2,
                                                     R=R, T=T, flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
-                                                    imageSize=(width, height), newImageSize=(width, height))
+                                                    imageSize=(width, height), newImageSize=(int(width / downscale), int(height/ downscale)))
 
         # Computes the undistortion and rectification transformation map for each camera
-        map_left_x, map_left_y = cv2.initUndistortRectifyMap(cameraMatrix1, distCoeffs1, R1, P1, (width, height),
+        map_left_x, map_left_y = cv2.initUndistortRectifyMap(cameraMatrix1, distCoeffs1, R1, P1, (int(width / downscale), int(height/ downscale)),
                                                              cv2.CV_32FC1)
-        map_right_x, map_right_y = cv2.initUndistortRectifyMap(cameraMatrix2, distCoeffs2, R2, P2, (width, height),
+        map_right_x, map_right_y = cv2.initUndistortRectifyMap(cameraMatrix2, distCoeffs2, R2, P2, (int(width / downscale), int(height/ downscale)),
                                                                cv2.CV_32FC1)
         # Store each rectification for later use
         self.rectifiedLeft = RectifiedCamera(cameraMatrix1, distCoeffs1, R1, P1, map_left_x, map_left_y, Q)
         self.rectifiedRight = RectifiedCamera(cameraMatrix2, distCoeffs2, R2, P2, map_right_x, map_right_y, Q)
+
+
+        # Neural net image : computes the undistortion and rectification transformation map for neural net image (size is original)
+        # Computes rectification transforms for each head of a calibrated stereo camera.
+        netR1, netR2, netP1, netP2, netQ, _, _ = cv2.stereoRectify(cameraMatrix1=cameraMatrix1, cameraMatrix2=cameraMatrix2,
+                                                    distCoeffs1=distCoeffs1, distCoeffs2=distCoeffs2,
+                                                    R=R, T=T, flags=cv2.CALIB_ZERO_DISPARITY, alpha=0,
+                                                    imageSize=(width, height), newImageSize=(width, height))
+
+        netmap_left_x, netmap_left_y = cv2.initUndistortRectifyMap(cameraMatrix1, distCoeffs1, netR1, netP1, (width, height),
+                                                             cv2.CV_32FC1)
+        # Store each rectification for later use
+        self.net_rectifiedLeft = RectifiedCamera(cameraMatrix1, distCoeffs1, netR1, netP1, netmap_left_x, netmap_left_y, netQ)
 
     def rectifyLeftRight(self, imageLeft, imageRight):
         if not self.calibration:
@@ -138,6 +156,15 @@ class DisparityProcessor:
         imageRectifiedLeft = self.rectifiedLeft.rectifyImage(imageLeft)
         imageRectifiedRight = self.rectifiedRight.rectifyImage(imageRight)
         return imageRectifiedLeft, imageRectifiedRight
+
+
+    def netrectifyLeft(self, imageLeft):
+        if not self.calibration:
+            return [], []
+        # Undistort each image
+        netimageRectifiedLeft = self.net_rectifiedLeft.rectifyImage(imageLeft)
+        return netimageRectifiedLeft
+
 
     def computeDisparityMap(self, imageRectifiedLeft, imageRectifiedRight):
         """
@@ -243,7 +270,11 @@ Retrieve the specific Depth in meter
         if not self.calibration:
             return 0
         x, y = point2D
-        depth = depthMap[int(y)][int(x)]
+        try:
+            depth = depthMap[int(y)][int(x)]
+        except IndexError as e:
+            depth = 0
+        
         return depth
 
 

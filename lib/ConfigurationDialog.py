@@ -186,6 +186,7 @@ class ConfigurationDialog():
         if rightCamSource is None :
             rightCamSource = ""
         isStereoCam = True if rightCamSource == "" else False
+        isStereoCam = False if self.isCsiCam.get() else isStereoCam
 
         # print(f'initCameras: {leftCamSource} - {rightCamSource} - {isStereoCam}')
 
@@ -337,7 +338,7 @@ class ConfigurationDialog():
         lbl_squaresize.grid(column=0, row=1, sticky=E)
         txt_squaresize = ttk.Entry(frame, textvariable=self.squareSize)
         txt_squaresize.grid(column=1, row=1, sticky=W)
-        lbl_cm = ttk.Label(frame, text="cm")
+        lbl_cm = ttk.Label(frame, text="mm")
         lbl_cm.grid(column=2, row=1)
 
         # FishEye
@@ -432,7 +433,7 @@ class ConfigurationDialog():
 
                 if self.rightCamera is not None:
                     self.camRightPicture = cv2.cvtColor(self.rightCamera.readLeft(), cv2.COLOR_BGR2RGB)
-                elif self.leftCamera is not None:
+                elif self.leftCamera is not None and not self.isCsiCam.get():
                     self.camRightPicture = cv2.cvtColor(self.leftCamera.readRight(), cv2.COLOR_BGR2RGB)
 
                 if self.camLeftPicture is not None:

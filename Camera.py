@@ -2,7 +2,6 @@ import numpy as np
 import cv2
 import os
 # from detection_tools import *
-import pyzed.sl as sl
 import zmq
 import base64
 import globalvar
@@ -19,18 +18,22 @@ from lib.NetCam import *
 import mmap
 
 
+if args.zed:
+    import pyzed.sl as sl
+
+
 class mmcam:
 
-    def __init__(self,camid):
+    def __init__(self,i):
             
         self.dictionary = {
-                'width': int(1920),  #2592, 1920 , 1280 #*512/800
-                'height': int(1080), #1520 , 1080 , 720 *512/800
+                'width': int(1600*512/800),  #2592, 1920 , 1280 #*512/800
+                'height': int(480*512/800), #1520 , 1080 , 720 *512/800
             }
 
         self.shape = (self.dictionary['height'], self.dictionary['width'], 3)
         self.n = (self.dictionary['height'] * self.dictionary['width'] * 3 * 1)
-        self.fd = os.open('/tmp/mmapqds' + str(camid), os.O_RDONLY)
+        self.fd = os.open('/tmp/mmaptest' + str(i), os.O_RDONLY)
         self.mm = mmap.mmap(self.fd, self.n, mmap.MAP_SHARED, mmap.PROT_READ)  # it has to be only for reading
 
     def read(self):
@@ -38,6 +41,11 @@ class mmcam:
         self.mm.seek(0)
         buf = self.mm.read(self.n)
         frame = np.frombuffer(buf, dtype=np.uint8).reshape(self.shape)
+        #        frame = np.frombuffer(buf, dtype=np.float32).reshape(self.shape)
+
+        #        mean=(0.406, 0.456, 0.485)
+        #        std=(0.225, 0.224, 0.229)
+        #        frame = (frame / 255 - mean) / std
         return frame
 
     def get(self, setting):
@@ -50,17 +58,17 @@ class mmcam:
 
 class ipcam:
 
-    def __init__(self, ip, port,pwd):
+    def __init__(self, ip, port):
         import cv2
-        self.cap = cv2.VideoCapture(f'rtsp://admin:{pwd}@{ip}:{port}/profile1/media.smp')
+        self.cap = cv2.VideoCapture(f'rtsp://admin:m0P04b*PYMG@{ip}:{port}/profile1/media.smp')
         #        self.cap = cv2.VideoCapture(f'rtsp://admin:Admin2021@{ip}:{port}/profile4/media.smp')
 
         print(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         print(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
         self.dictionary = {
-            'width': 1920,  # 2592, 1920 , 1280
-            'height': 1080,  # 1520 , 1080 , 720
+            'width': 1280,  # 2592, 1920 , 1280
+            'height': 720,  # 1520 , 1080 , 720
         }
 
     def read(self):
@@ -185,11 +193,15 @@ class Opencv_cam:
 
     def __init__(self, args, linuxid, vflip, hflip):
         isStereo = False
+        isCsiCam = False
         if len(args.linuxid) == 1:
             isStereo = True
 
-        self.cap = NetCam(capture=args.resolution, source=linuxid, isStereoCam=isStereo,isCsiCam=True)
-        self.cap.showDebug()
+        if len(args.linuxid) == 2:
+            isCsiCam = True
+
+        self.cap = NetCam(capture=args.resolution, source=linuxid, isStereoCam=isStereo,isCsiCam=isCsiCam)
+        #self.cap.showDebug()
 
         if vflip:
             self.cap.invertVertical()
@@ -421,7 +433,7 @@ class Stereocam:
             self.width = int(self.camleft.get('width'))
 
         elif args.mmcam:
-            self.width = int(self.camleft.get('width') / 1)
+            self.width = int(self.camleft.get('width') / 2)
 
         else:
             self.width = int(self.camleft.get('width') / 2)
@@ -434,6 +446,8 @@ class Stereocam:
         self.image_to_display = None
         self.image_data = None
         self.rigth_image_data = None
+        self.netimage_data = None
+        self.right_netimage_data = None
         self.cloud = None
         self.disparity_to_display = None
         self.buggycloud = False
@@ -460,6 +474,7 @@ class Stereocam:
 
         self.disparityProcessor = None
         self.stereo = None
+        self.rectifydown=args.rectifydown
 
         basePath = os.path.dirname(os.path.realpath(__file__))
         configFileName = f'{basePath}/calibration/SN{serial_number}.json'
@@ -523,6 +538,7 @@ class Stereocam:
             cloud, disparity_to_display = self.camleft.get_pointcloud()
         elif self.args.opencv:
             cloud, disparity, depthMap = self.disparityProcessor.computeDisparityMap(left_frame_rect, right_frame_rect)
+
             # cloud,disparity_to_display = self.stereo.get_pointcloud(left_frame_rect, right_frame_rect, self.coeff, self.cloud_name)
         elif self.args.nerian:
             cloud, disparity_to_display = self.camleft.get_pointcloud()
@@ -535,8 +551,8 @@ class Stereocam:
 
         if displayDisparity and disparity is not None:
             #  Compute the disparityTo dispay only when needed
-            disparity_to_display = self.disparityProcessor.convertDisparityToColor(disparity)
-
+            #disparity_to_display = self.disparityProcessor.convertDisparityToColor(disparity)
+            disparity_to_display = self.disparityProcessor.convertDisparityToGray(disparity)
         current = FpsCatcher.currentMilliTime()
         globalvar.stereoFps.compute(current - now)
 
@@ -555,16 +571,22 @@ class Stereocam:
         if self.camright != None:
             left_frame = self.camleft.read()
             right_frame = self.camright.read()
-            
+            self.netimage_data = left_frame
+            self.right_netimage_data = right_frame
         else:
             frame = self.camleft.read()
             frames = np.split(frame, 2, axis=1)
-            left_frame, right_frame = frames
+            [left_frame, right_frame] = frames
+            self.netimage_data = left_frame
+            self.right_netimage_data = right_frame
+
 
             
         if args.nerian:
             left_frame_rect = left_frame
             right_frame_rect = right_frame
+            self.netimage_data = left_frame
+            self.right_netimage_data = right_frame
 
         elif args.ipcam:
             frame = self.camleft.read()
@@ -573,10 +595,11 @@ class Stereocam:
 
         elif args.mmcam:
             #            frame = self.camleft.read()
-            left_frame_rect = frame #left_frame
-            right_frame_rect = None #right_frame
+            left_frame_rect = left_frame
+            right_frame_rect = right_frame
         #            left_frame_rect = cv2.remap(left_frame[:, :, 0:3], map_left_x, map_left_y, interpolation=cv2.INTER_LINEAR)
         #            right_frame_rect = cv2.remap(right_frame[:, :, 0:3], map_right_x, map_right_y, interpolation=cv2.INTER_LINEAR)
+
                                   
         elif args.zed:
             frame = self.camleft.read()
@@ -586,6 +609,22 @@ class Stereocam:
             left_frame_rect, right_frame_rect = self.disparityProcessor.rectifyLeftRight(left_frame, right_frame)
 
         return left_frame_rect, right_frame_rect
+
+    def net_get_rectified_left(self):
+        #frame = self.camleft.read()
+        # if args.stereo:
+        #     frames = np.split(frame, 2, axis=1)
+        #     [left_frame, right_frame] = frames
+        # else:
+        #     left_frame = frame
+        #     right_frame = None
+        #frames = np.split(frame, 2, axis=1)
+        #[left_frame, right_frame] = frames
+
+        #netleft_frame_rect  = left_frame if args.nerian else self.disparityProcessor.netrectifyLeft(left_frame)
+        netleft_frame_rect  =  self.netimage_data #if args.nerian else self.disparityProcessor.netrectifyLeft(self.netimage_data)
+
+        return netleft_frame_rect
 
     def get_left_right(self):
 

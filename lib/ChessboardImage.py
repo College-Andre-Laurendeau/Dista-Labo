@@ -1,6 +1,6 @@
 ################################################################################
 ##          Classe ChessboardImage
-##      Stock les informations d'une image et les resultat de sa calibration
+##      Stock les informations d'une image et les resultats de sa calibration
 ##  Author : J. Coupez
 ##  Date : 20/01/2021
 ##  Copyright Dista
@@ -34,7 +34,7 @@ class ChessboardImage():
     def getImage(self):
         if self.image is None:
             self.image = cv2.imread(self.fileName)
-            # print(f'read image {self.fileName} {self.image}.')
+            #print(f'read image {self.fileName}.') #***here
             
         return self.image
 

@@ -7,7 +7,9 @@ sys.path.append(path)
 os.chdir(path)
 
            
-
+import torch
+from torchvision.transforms import transforms
+import torch.nn.functional as F
 import numpy as np
 import cv2
 from config import *
@@ -20,14 +22,12 @@ from scipy.spatial import distance_matrix
 from lib.FpsCatcher import FpsCatcher
 from database_tools import *
 import globalvar
+from torch.backends import cudnn
 
 import threading
 import queue
-
-from itertools import product
 import multiprocessing as mp
 #mp.set_start_method('spawn')
-from multiprocessing.dummy import Pool as ThreadPool
 
 import time
 
@@ -47,24 +47,41 @@ if len(args.catego) != 0:
 
 
 ################################################################################
+if args.yolo4:
+    # yolov4
+    sys.path.append(user + '/Documents/dista/yolov4')
+    os.chdir(user + '/Documents/dista/yolov4')
+    from demo import *
+    from tool.utils import *
+    from tool.torch_utils import *
+    from tool.darknet2pytorch import Darknet
 
+elif args.yolo5:
+
+    path = os.path.dirname(os.path.realpath(__file__)) + '/yolov5'
+    sys.path.append(path)
+    os.chdir(path)
+    from detect import *
+    from models.experimental import attempt_load
+    from utils.datasets import LoadStreams, LoadImages, imgtoyolo5
+    from utils.general import check_img_size, check_requirements, check_imshow, non_max_suppression, apply_classifier, \
+        scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path, save_one_box, my_non_max_suppression
+    from utils.plots import colors, plot_one_box
+    from utils.torch_utils import select_device, load_classifier, time_synchronized
+
+else :
+    path = os.path.dirname(os.path.realpath(__file__)) + '/efficientdetection'
+    sys.path.append(path)
+    os.chdir(path)
+    from backbone import EfficientDetBackbone
+    from efficientdet.utils import BBoxTransform, ClipBoxes
+    from utils.utils import preprocess, preprocess_video, postprocess, STANDARD_COLORS, standard_to_bgr
 
 class Neural_Net:
 
-    import torch
-    from torch.backends import cudnn
-    from backbone import EfficientDetBackbone
-    from efficientdet.utils import BBoxTransform, ClipBoxes
-    from utils.utils import preprocess_video_normalize , preprocess_video_resize,preprocess_video_pad, preprocess_video_crop
-    #torch.set_num_threads(1)            
-    import torch.nn.functional as F
-    from torchvision.transforms import transforms    
-#    torch.multiprocessing.set_start_method('spawn')
     
     def __init__(self, args):
-        
-#        torch.set_num_threads(2)            
-        
+
         self.compound_coef = args.netsize
         self.force_input_size = None  # set None to use default size
     
@@ -74,8 +91,8 @@ class Neural_Net:
     
         self.use_cuda = True if not args.nocuda else False
         self.use_float16 = False
-        self.cudnn.fastest = True
-        self.cudnn.benchmark = True
+        cudnn.fastest = True
+        cudnn.benchmark = True
     
         self.obj_list = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
                     'fire hydrant', '', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep',
@@ -88,7 +105,7 @@ class Neural_Net:
                     'refrigerator', '', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
                     'toothbrush']
     
-        self.obj_thick_dict = {'person': 0.01, 'bicycle': 0.2, 'car': 1, 'motorcycle': 0.3, 'airplane': 5, 'bus': 3, 'train': 3,
+        self.obj_thick_dict = {'person': 0.02, 'bicycle': 0.02, 'car': 0.05, 'motorcycle': 0.3, 'airplane': 5, 'bus': 3, 'train': 3,
                           'truck': 3, 'boat': 3, 'traffic light': 0.2,
                           'fire hydrant': 0.2, '_': 0.02, 'stop sign': 0.1, 'parking meter': 0.1, 'bench': 0.2, 'bird': 0.1,
                           'cat': 0.2, 'dog': 0.2, 'horse': 0.4, 'sheep': 0.4,
@@ -102,45 +119,67 @@ class Neural_Net:
                           'carrot': 0.02, 'hot dog': 0.02, 'pizza': 0.02, 'donut': 0.02,
                           'cake': 0.02, 'chair': 0.1, 'couch': 0.2, 'potted plant': 0.1, 'bed': 0.5, '_': 0.02,
                           'table': 0.3, '_': 0.02, '_': 0.02, 'toilet': 0.2, '_': 0.02, 'tv': 0.01,
-                          'laptop': 0.1, 'mouse': 0.02, 'remote': 0.02, 'keyboard': 0.02, 'cellphone': 0.02,
+                          'laptop': 0.1, 'mouse': 0.05, 'remote': 0.02, 'keyboard': 0.02, 'cellphone': 0.05,
                           'microwave': 0.2, 'oven': 0.3, 'toaster': 0.1, 'sink': 0.2,
                           'refrigerator': 0.3, '_': 0.02, 'book': 0.02, 'clock': 0.02, 'vase': 0.02, 'scissors': 0.02,
                           'teddy bear': 0.1, 'hair drier': 0.1,
                           'toothbrush': 0.02}
-    
+
+        delete = [11, 25, 28, 29, 44, 65, 67, 68, 70, 82]
+        sorted_indecies_to_delete = sorted(delete, reverse=True)
+        if args.yolo5 or args.yolo4:
+            for index in sorted_indecies_to_delete:
+                del self.obj_list[index]
+
         #    color_list = standard_to_bgr(STANDARD_COLORS)
-        self.input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536]
-        self.input_size = self.input_sizes[self.compound_coef] if self.force_input_size is None else self.force_input_size        
+        if args.yolo4:
+            self.input_sizes = [288, 640, 768, 896, 1024, 1280, 1280, 1536,1920] #512 is the netsize 0 for efficent and yolov5
+        else:
+            self.input_sizes = [512, 640, 768, 896, 1024, 1280, 1280, 1536,1920] #512 is the netsize 0 for efficent and yolov5
 
-        self.mean=np.array([0.406, 0.456, 0.485],dtype=np.float32)
-        self.std=np.array([0.225, 0.224, 0.229],dtype=np.float32)
-        self.scale=np.array([255, 255, 255],dtype=np.float32)
-
-
-#        imgscale = np.zeros((imgh,imgw,3),dtype=np.float32)
-#        imgscale[:,:,:] = self.scale   
-#        self.imgscale = imgscale        
-#        imgmean = np.zeros((imgh,imgw,3),dtype=np.float32)
-#        imgmean[:,:,:] = self.mean
-#        self.imgmean = imgmean
-#        imgstd = np.zeros((imgh,imgw,3),dtype=np.float32)
-#        imgstd[:,:,:] = self.std
-#        self.imgstd = imgstd
+        self.input_size = self.input_sizes[self.compound_coef] if self.force_input_size is None else self.force_input_size
+        self.netshape = None
 
 
         self.detection_threshold=args.detection_threshold
         self.nonmax_threshold=args.nonmax_threshold
-    
-        self.model = self.EfficientDetBackbone(compound_coef=self.compound_coef, num_classes=1,
-                                     ratios=self.anchor_ratios, scales=self.anchor_scales)
-        self.model.load_state_dict(self.torch.load(f'weights/efficientdet-d{self.compound_coef}_9_108890.pth'))
-        self.model.requires_grad_(False)
+        self.imsplit = args.imsplit
 
-        self.model.eval()
-        if self.use_cuda:
-            self.model = self.model.cuda()
-        if self.use_float16:
-            self.model = self.model.half()
+        if args.yolo4:
+            # yolo4
+            cfgfile = user + '/Documents/dista/yolov4/cfg/yolov4-tiny.cfg'
+            weightfile = user + '/Documents/dista/yolov4/yolov4-tiny.weights'
+            self.model = Darknet(cfgfile)
+            self.model.load_weights(weightfile)
+            self.model.cuda()
+            self.model.eval()
+            if self.use_float16:
+                self.model = self.model.half()
+
+        elif args.yolo5:
+            weights= 'yolov5s.pt' #'crowdhuman_yolov5m.pt' #'best.pt'#'crowdhuman_yolov5m.pt'
+            device = select_device('0')
+            self.half = device.type != 'cpu'  # half precision only supported on CUDA
+            self.model = attempt_load(weights, map_location=device)  # load FP32 model
+            # self.half = device.type != 'cpu'  # half precision only supported on CUDA
+            # if self.half:
+            #    self.model.half()  # to FP16
+            self.stride = int(self.model.stride.max())  # model stride
+            self.input_size = check_img_size(self.input_size, s=self.stride)  # check img_size
+        else:
+
+            self.model = EfficientDetBackbone(compound_coef=self.compound_coef, num_classes=len(self.obj_list),
+                                              ratios=self.anchor_ratios, scales=self.anchor_scales)
+            self.model.load_state_dict(torch.load(
+                f'weights/efficientdet-d{self.compound_coef}.pth'))  # _17_144252  _first_test_person_adam_15ep_augmented
+            self.model.requires_grad_(False)
+            self.model.eval()
+            if self.use_cuda:
+                self.model = self.model.cuda()
+            if self.use_float16:
+                self.model = self.model.half()
+
+
         
         self.obj_cat_id=[]
         for i in range(len(args.catego)):
@@ -149,60 +188,78 @@ class Neural_Net:
 
         class SquarePad:
             
-            def __init__(self,netsize, F):
+            def __init__(self,netsize):
                  self.netsize = netsize
-                 self.F = F
+
             def __call__(self, image):
                 c, h, w = image.size()
-                padding = (0, 0, 0, self.netsize - self.netsize // w * h)
                 padding = (0, 0, 0, self.netsize - h * self.netsize // w )
-                padding = (0, 0, 0, self.netsize - h * self.netsize // w )
-                return self.F.pad(image, padding, 'constant', 0)
-                return self.F.pad(image, padding, 'constant', 0)
+                return F.pad(image, padding, 'constant', 0)
 
-        
         class resize():
-            
-            def __init__(self,netsize , F):
-                 self.netsize = netsize
-                 self.F = F
-            def __call__(self, image):
-                return self.F.interpolate(image.unsqueeze(0),size=[image.shape[1] * self.netsize // image.shape[2] ,self.netsize]).squeeze()
 
-        class downsample():
-            
-            def __init__(self, netsize,image ,F):
-                
-                self.netsize = netsize
-                self.F = F
-                hori=self.torch.linspace(1, image.shape[2], steps=self.netsize)
-                verti=self.torch.linspace(1, image.shape[1], steps=self.netsize * image.shape[1]//image.shape[1])
-                mesh_h, mesh_v = self.torch.meshgrid((verti, hori))
-                self.grid = self.torch.stack((mesh_v, mesh_h), 2).float().cuda()
-            
-            def __call__(self, image):
-                return self.F.grid_sample(image.unsqueeze(0), self.grid.unsqueeze(0)).squeeze(0)
+            if args.yolo4:
+                def __init__(self, width, height):
+                    self.width = width
+                    self.height = height
+
+                def __call__(self, image):
+                    return F.interpolate(image.unsqueeze(0), size=[self.height, self.width]).squeeze()
+
+            elif args.yolo5:
+                def __init__(self, netsize):
+                    self.netsize = netsize
+                def __call__(self, image):
+                    ratio = self.netsize / max(image.shape[1],image.shape[2])
+                    return F.interpolate(image.unsqueeze(0),size=[int(image.shape[2] * ratio), int(image.shape[1] * ratio)]).squeeze()
+
+            else:
+                def __init__(self, netsize):
+                    self.netsize = netsize
+
+                def __call__(self, image):
+                    return F.interpolate(image.unsqueeze(0), size=[image.shape[1] * self.netsize // image.shape[2],self.netsize]).squeeze()
 
 
-        self.transform_compose = self.transforms.Compose([
-                        resize(self.input_size, self.F),
-                        self.transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),   #(0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-                        SquarePad(self.input_size, self.F)
-                        ])
-        
-        self.totensor = lambda img : self.torch.from_numpy(img).cuda().permute(2,0,1).to(dtype=self.torch.float)/255.
-        
-        
+        if args.yolo4:
+            self.transform_compose = transforms.Compose([
+                resize(self.model.width, self.model.height)])
+        elif args.yolo5 :
+            self.transform_compose = transforms.Compose([
+                resize(self.input_size),
+                SquarePad(self.input_size)])
+        else:
+            self.transform_compose = transforms.Compose([
+                resize(self.input_size),
+                transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                SquarePad(self.input_size)])
 
-    def transform(self,images):
-        transformed_imgs = [self.transform_compose(self.totensor(img)) for img in images]
+        if self.use_cuda:
+            self.totensor = lambda img: torch.from_numpy(img).cuda().permute(2, 0, 1).to(dtype=torch.float) / 255.
+        else:
+            self.totensor = lambda img: torch.from_numpy(img).permute(2, 0, 1).to(dtype=torch.float) / 255.
+
+
+
+    def transform(self, images):
+        if not args.yolo5:
+            transformed_imgs = [self.transform_compose(self.totensor(img[:, :, [2, 1, 0]])) for img in images]
+        else:
+            transformed_imgs = [imgtoyolo5(img, self.input_size, stride=self.stride) for img in images]
+            transformed_imgs = [self.totensor(img[:, :, [2, 1, 0]]) for img in transformed_imgs]
+            self.netshape = transformed_imgs[0].shape[1:]
         return transformed_imgs
 
 
     def get_detection(self, left_frame_list):
 
-        from utils.utils import preprocess, preprocess_video, postprocess
-        
+
+        #split images in quadrants : put all splits into a single batch
+        new_left_frame_list = splitimage(left_frame_list[0], args.imsplit)
+        for i in range(1,len(left_frame_list)):
+            new_left_frame_list = [*new_left_frame_list,*splitimage(left_frame_list[i], args.imsplit)]
+        imh, imw, c = new_left_frame_list[0].shape
+
         if globalvar.detectionFps is None:
             globalvar.detectionFps = FpsCatcher(autoStart=False)
         if globalvar.totalNetFps is None:
@@ -211,83 +268,153 @@ class Neural_Net:
             
     
         t=time.time()
-        framed_imgs=self.transform(left_frame_list) 
+        framed_imgs=self.transform(new_left_frame_list)
         globalvar.prepro = np.int((time.time()-t)*1000)        
         
 
 
         if self.use_cuda:
-            x = self.torch.stack([fi for fi in framed_imgs], 0)
+            x = torch.stack([fi for fi in framed_imgs], 0)
         else:
-            x = self.torch.stack([self.torch.from_numpy(fi) for fi in framed_imgs], 0)
+            x = torch.stack([torch.from_numpy(fi) for fi in framed_imgs], 0)
                         
-        x = x.to(self.torch.float32 if not self.use_float16 else self.torch.float16)
+        x = x.to(torch.float32 if not self.use_float16 else torch.float16)
 
         
-        with self.torch.no_grad():
+        with torch.no_grad():
 
             now = FpsCatcher.currentMilliTime()
             t=time.time()
-            features, regression, classification, anchors = self.model(x)
-            globalvar.nettime = np.int((time.time()-t)*1000)        
-            current = FpsCatcher.currentMilliTime()
-            globalvar.detectionFps.compute(current - now)
+
+            if args.yolo4 :
+                imh, imw, c = new_left_frame_list[0].shape
+                outputs = do_detect(args,imh, imw, self.model, x, self.detection_threshold, self.nonmax_threshold, use_cuda=True)
+                globalvar.nettime = np.int((time.time() - t) * 1000)
+                current = FpsCatcher.currentMilliTime()
+                globalvar.detectionFps.compute(current - now)
+                t = time.time()
+                globalvar.post = np.int((time.time() - t) * 1000)
+
+                outputs = [np.asarray(out) for out in outputs]
+                for i in range(len(outputs)):
+                   if len(outputs[i]) !=0:
+                    outputs[i] = np.delete(outputs[i],4,1) # extra confidence column for some reason
+
+            elif args.yolo5:
+                #x = x.half() if self.half else x.float()  # uint8 to fp16/32
+                outputs = self.model(x)[0]
+                globalvar.nettime = np.int((time.time() - t) * 1000)
+                current = FpsCatcher.currentMilliTime()
+                globalvar.detectionFps.compute(current - now)
+
+                tt = time.time()
+                outputs = my_non_max_suppression(args, self.netshape, imw, imh, outputs, self.detection_threshold,
+                                                 self.nonmax_threshold, classes=self.obj_cat_id, agnostic=False)
+                globalvar.post = np.int((time.time() - tt) * 1000)
+
+            else:
+                features, regression, classification, anchors = self.model(x)
+                globalvar.nettime = np.int((time.time()-t)*1000)
+                current = FpsCatcher.currentMilliTime()
+                globalvar.detectionFps.compute(current - now)
 
 
 
-            regressBoxes = self.BBoxTransform()
-            clipBoxes = self.ClipBoxes()
+                regressBoxes = BBoxTransform()
+                clipBoxes = ClipBoxes()
 
-            outputs = postprocess(x,
-                                  anchors, regression, classification,
-                                  regressBoxes, clipBoxes,
-                                  self.detection_threshold, self.nonmax_threshold)
+                outputs = postprocess(self, args, x, imw, imh,
+                                      anchors, regression, classification,
+                                      regressBoxes, clipBoxes,
+                                      )
 
-
-
+                for i in range(len(outputs)):
+                    detecs = np.zeros((outputs[i]['rois'].shape[0], 6))
+                    if len(outputs[i]['rois'])!=0:
+                        detecs[:, 0:4] = outputs[i]['rois']
+                        detecs[:, 4] = outputs[i]['scores']
+                        detecs[:, 5] = outputs[i]['class_ids']
+                    outputs[i] = detecs
         return outputs
 
 
 ################################################################################
 
 
-################################################################################
 def format_detection(outputs):
-    #                JUST TO MAKE DETECT OUTPUT FORMAT SAME AS OTHER MODELS (AS YOLO) SO THE REST OF THE CODE DOES NOT CHANGE.
-    detecs = np.zeros((outputs['rois'].shape[0], 8))
-    detecs[:, 7] = outputs['class_ids']
-    detecs[:, 1:5] = outputs['rois']
-    detecs[:, 6] = outputs['scores']
+
+    detecs = np.zeros((outputs.shape[0], 11))
+    detecs[:, 1:5] = outputs[:, 0:4] # box
+    detecs[:, 6] = outputs[:, 4] # confidence
+    detecs[:, 7] = outputs[:, 5] # class id
 
     return detecs
 
 ################################################################################
-
+# def format_detection(outputs):
+#     #                JUST TO MAKE DETECT OUTPUT FORMAT SAME AS OTHER MODELS (AS YOLO) SO THE REST OF THE CODE DOES NOT CHANGE.
+#     detecs = np.zeros((outputs['rois'].shape[0], 8))
+#     detecs[:, 7] = outputs['class_ids']
+#     detecs[:, 1:5] = outputs['rois']
+#     detecs[:, 6] = outputs['scores']
+#
+#     return detecs
 
 ################################################################################
-def scale_2d_bounding_box(detecs, input_size, w, h):
-    #   SCALE BOUDING BOX TO ORIGINAL IMAGE (CAMERA) SIZE
 
+def scale_2d_bounding_box(detecs, input_size, netshape, w, h):
+    # SCALE BOUDING BOX TO ORIGINAL IMAGE (CAMERA) SIZE
     netsize = np.asarray([input_size, input_size])
     imsize = np.asarray([h, w])
-    
-    wstart = int((w-input_size) /2)
-    scale_factors = np.max(imsize / netsize, axis=0)
-#    scale_factors = imsize / netsize
-    
-    detecs[:, 1] = detecs[:, 1] * scale_factors
-    detecs[:, 3] = detecs[:, 3] * scale_factors
-    detecs[:, 2] = detecs[:, 2] * scale_factors
-    detecs[:, 4] = detecs[:, 4] * scale_factors
-    
-    
-    #             MAKE SURE IT DOEST NOT GO OVER IMAGE LIMIT
+    #if args.yolo5:
+    #    return detecs
+        # Rescale boxes from netshape to original image size
+        # scale_factors = min(netshape[0] / h, netshape[1] / w)  # gain  = old / new
+        # pad = (netshape[1] - w * scale_factors) / 2, (netshape[0] - h * scale_factors) / 2  # wh padding
+        # detecs[:, [1, 3]] -= pad[0]  # x padding
+        # detecs[:, [2, 4]] -= pad[1]  # y padding
+        # detecs[:, :5] /= scale_factors
+    #else :
+    #    return detecs
+        # #scale_factors = np.max(imsize / netsize, axis=0)
+        # scale_factors = 1
+        # #    scale_factors = imsize / netsize
+        # detecs[:, 1] = detecs[:, 1] * scale_factors
+        # detecs[:, 3] = detecs[:, 3] * scale_factors
+        # detecs[:, 2] = detecs[:, 2] * scale_factors
+        # detecs[:, 4] = detecs[:, 4] * scale_factors
+
+    ## MAKE SURE IT DOEST NOT GO OVER IMAGE LIMIT
     detecs[:, 1] = np.min((detecs[:, 1], np.repeat(imsize[1], detecs.shape[0])), axis=0)
     detecs[:, 3] = np.min((detecs[:, 3], np.repeat(imsize[1], detecs.shape[0])), axis=0)
     detecs[:, 2] = np.min((detecs[:, 2], np.repeat(imsize[0], detecs.shape[0])), axis=0)
     detecs[:, 4] = np.min((detecs[:, 4], np.repeat(imsize[0], detecs.shape[0])), axis=0)
 
     return detecs
+################################################################################
+# def scale_2d_bounding_box(detecs, input_size, w, h):
+#     #   SCALE BOUDING BOX TO ORIGINAL IMAGE (CAMERA) SIZE
+#
+#     netsize = np.asarray([input_size, input_size])
+#     imsize = np.asarray([h, w])
+#
+#     wstart = int((w-input_size) /2)
+#     scale_factors = np.max(imsize / netsize, axis=0)
+# #    scale_factors = imsize / netsize
+#
+#     detecs[:, 1] = detecs[:, 1] * scale_factors
+#     detecs[:, 3] = detecs[:, 3] * scale_factors
+#     detecs[:, 2] = detecs[:, 2] * scale_factors
+#     detecs[:, 4] = detecs[:, 4] * scale_factors
+#
+#
+#     #             MAKE SURE IT DOEST NOT GO OVER IMAGE LIMIT
+#     detecs[:, 1] = np.min((detecs[:, 1], np.repeat(imsize[1], detecs.shape[0])), axis=0)
+#     detecs[:, 3] = np.min((detecs[:, 3], np.repeat(imsize[1], detecs.shape[0])), axis=0)
+#     detecs[:, 2] = np.min((detecs[:, 2], np.repeat(imsize[0], detecs.shape[0])), axis=0)
+#     detecs[:, 4] = np.min((detecs[:, 4], np.repeat(imsize[0], detecs.shape[0])), axis=0)
+#
+#     return detecs
 
 
 ################################################################################
@@ -316,18 +443,30 @@ def get_bounding_box_samples(image_data2, bounding_box_2d, percent, nbsamples):
 
 
 ################################################################################
-def filter_cloud_inside_object_box(cap,cloud, bounding_box_2d, obj_thick):
+def filter_cloud_inside_object_box(cap, bounding_box_2d, obj_thick):
     cap.buggycloud = False
+    cloud=np.copy(cap.cloud)
+    # adjust detection bounding box size to disparity map size
+    step = 1#args.cloudstep
+    scale_factors = 1 / step
+    #downscale = args.rectifydown
+    downscale = 1#cap.rectifydown
 
-    boxcloud = cloud[int(bounding_box_2d[0, 1]):int(bounding_box_2d[2, 1]),
-               int(bounding_box_2d[0, 0]):int(bounding_box_2d[2, 0])][:, :, 0:3]
+    #nbounding_box_2d = np.copy(bounding_box_2d) * (cap.width) / args.netsizes[args.netsize]  # for resized image
+    #nbounding_box_2d = np.copy(nbounding_box_2d) * scale_factors * 1 / downscale  # for downsampled cloud and rectified image
+
+    nbounding_box_2d = np.copy(bounding_box_2d) * scale_factors * 1 / downscale  # for downsampled cloud and rectified image
+    nbounding_box_2d[nbounding_box_2d<0]
+    a,b,c = cloud.shape
+    boxcloud = np.copy(cloud[int(max(nbounding_box_2d[0, 1],0)):int(min(nbounding_box_2d[2, 1],a)),
+               int(max(nbounding_box_2d[0, 0],0)):int(min(nbounding_box_2d[2, 0],b))][:, :, 0:3])
     a = boxcloud.shape[0]
     b = boxcloud.shape[1]
     # GET THE 3D POINTS OF A UNIFORM SAMPLES (GRID) OVER THE 2D BOX
     
     samples=[]
     if args.view_3dbox:
-        nbsamples = 50
+        nbsamples = 20
         rangex = int(np.floor(0.9 * b))
         rangey = int(np.floor(0.9 * a))
         x1 = int(np.floor((b - rangex) / 2))
@@ -342,33 +481,34 @@ def filter_cloud_inside_object_box(cap,cloud, bounding_box_2d, obj_thick):
         samples = samples[~np.isinf(samples).any(axis=1)]
 
     # GET THE 3D POINTS OF A UNIFORM SAMPLES (GRID) OVER CENTER OF THE 2D BOX
-
-    nbsamples = 50
+    nbsamples = 20
     horisamples = np.asarray(np.linspace(b / 4, b - b / 4, min(nbsamples, int(b / 2))), dtype=int)
     verisamples = np.asarray(np.linspace(a / 4, a - a / 4, min(nbsamples, int(a / 2))), dtype=int)
     centerregion = boxcloud[tuple(np.meshgrid(verisamples, horisamples))]  # warning multidimensional indexing will require futur
     centerregion = np.reshape(centerregion, (-1, 3))
     centerregion = centerregion[~np.isnan(centerregion).any(axis=1)]
     centerregion = centerregion[~np.isinf(centerregion).any(axis=1)]
-    centerregion[centerregion > 100]=0
+
+    try :
+        centerregion[centerregion >= 10000] = np.min(centerregion[:,2])
+    except :
+        centerregion[centerregion >= 10000] = 0
     # GET THE MODAL CLASS (USING DEPTH BINS) OF DEPTH IN THE CENTER REGION (SHOULD BE THE OBJECT...NOT THE BACKGROUND OR OCCLUSIONS)
     # REMOVE POINTS TO FAR FROM THE THE MODAL DEPTH
 
     if len(centerregion) != 0:
 
-#        nbbins=max(1,int(np.ceil((max(centerregion[:,2])-min(centerregion[:,2]))/obj_thick)))  # 0.02  # before 0.2
+        #nbbins=max(1,int(np.ceil((max(centerregion[:,2])-min(centerregion[:,2]))/obj_thick)))  # 0.02  # before 0.2
         nbbins = 250
         histo, edges = np.histogram(centerregion[:, 2], nbbins)
 #        histo=histogram1d(centerregion[:, 2], range=[min(centerregion[:, 2]),max(centerregion[:, 2])+0.001], bins=nbbins)
 #        edges = np.linspace(min(centerregion[:, 2]),max(centerregion[:, 2]),nbbins+1)
         binmode = np.argmax(histo)
         zmode = (edges[binmode]+edges[binmode+1])/2
+
         if args.view_3dbox: samples = samples[abs(samples[:, 2] - zmode) <= obj_thick, :]
         centerregion=centerregion[abs(centerregion[:,2]-zmode)<=obj_thick,:]
-
-        
-    if len(centerregion) == 0 or np.linalg.norm(np.mean(centerregion, axis=0)) <= 0.001:
-
+    if len(centerregion) == 0: #or np.linalg.norm(np.mean(centerregion, axis=0)) <= 0.001:
         cap.buggycloud = True
 #        print('filtered cloud is empty at cam number : ' + str(i))
 
@@ -443,12 +583,12 @@ def get_2d_centers(args,cap,object_2d_boxes):
     return imgpts
 ################################################################################       
 
-def get_2d_boxes(args,cap,input_size, max_number_objects):
+def get_2d_boxes(args,cap,input_size,netshape, max_number_objects):
 
     w = cap.width
     h = cap.height
     # RESSCALE 2D BOX COORDINATES TO MATCH CAMERA RESOLUTION
-    cap.detecs = scale_2d_bounding_box(cap.detecs, input_size, w, h)  # image_data
+    cap.detecs = scale_2d_bounding_box(cap.detecs, input_size,netshape, w, h)  # image_data
 #    object_2d_boxes = np.zeros((len(cap.detecs),4,2))
     object_2d_boxes = []
     cap.label=[]
@@ -470,7 +610,7 @@ def get_2d_boxes(args,cap,input_size, max_number_objects):
     
         if cap.detecs[k,6]>args.detection_threshold :
             object_2d_boxes.append(bounding_box_2d)
-            cap.label.append(int(cap.detecs[k, 7]))                   
+            cap.label.append(int(cap.detecs[k, 7]))
             cap.detectionconfidence.append(cap.detecs[k,6])
         
 #
@@ -478,7 +618,7 @@ def get_2d_boxes(args,cap,input_size, max_number_objects):
     cap.object_2d_centers=get_2d_centers(args,cap,cap.object_2d_boxes)
     
 
-
+##
 def get_3d_positions_and_dimensions(args,cap, netout, neural_net):
 
 
@@ -489,7 +629,7 @@ def get_3d_positions_and_dimensions(args,cap, netout, neural_net):
 
 
         # RESSCALE 2D BOX COORDINATES TO MATCH CAMERA RESOLUTION
-        cloud=cap[i].cloud
+        #cloud=cap[i].cloud
         # INITIALIZE LISTS CONTAINING ALL DETECTIONS                     
         object_center_positions = []
         object_3d_boxes = []
@@ -509,7 +649,6 @@ def get_3d_positions_and_dimensions(args,cap, netout, neural_net):
             label = cap[i].label[k] #int(cap[i].detecs[k, 7])
     
             if not args.justdetec:
-    
                 # TO PREVENT "BUGGY" POINT CLOUD  : TOO SMALL BOXES :
                 boxwitdth = abs(cap[i].object_2d_boxes[k][2,0] - cap[i].object_2d_boxes[k][0,0])
                 boxheight = abs(cap[i].object_2d_boxes[k][2,1] - cap[i].object_2d_boxes[k][0,1])
@@ -522,18 +661,18 @@ def get_3d_positions_and_dimensions(args,cap, netout, neural_net):
                     object_dimensions.append(dimensions)
                     object_3d_boxes.append(bounding_box)
     #                print('2d boxe is too small for stereo')
-    
+
                 # FILTER POINTCLOUD INSIDE 2D BOX
                 else:    
                     name = neural_net.obj_list[label]
 #                    t=time.time()
-                    samples, centerregion = filter_cloud_inside_object_box(cap[i],cloud, cap[i].object_2d_boxes[k], neural_net.obj_thick_dict[name])
+                    samples, centerregion = filter_cloud_inside_object_box(cap[i], cap[i].object_2d_boxes[k], neural_net.obj_thick_dict[name])
 #                    getfiltercloud = time.time()-t
 #                    print(f'GET FILTERCLOUD : {np.int(getfiltercloud*1000)}')
 
                     if cap[i].buggycloud:
                         position=np.array([np.nan, np.nan, np.nan])
-                        dimensions=np.array([np.nan, np.nan, np.nan])    
+                        dimensions=np.array([np.nan, np.nan, np.nan])
                         bounding_box=[np.nan]*8
     
                     else:
@@ -549,10 +688,10 @@ def get_3d_positions_and_dimensions(args,cap, netout, neural_net):
                         if args.view_3dbox and bounding_box.shape[0] == 8:
                             object_3d_boxes.append(bounding_box)
                         
-                        if position[2]>100:
-                            position=np.array([np.nan, np.nan, np.nan])
-                            dimensions=np.array([np.nan, np.nan, np.nan])    
-                            bounding_box=[np.nan]*8 
+                        # if position[2]>100:
+                        #     position=np.array([np.nan, np.nan, np.nan])
+                        #     dimensions=np.array([np.nan, np.nan, np.nan])
+                        #     bounding_box=[np.nan]*8
                         
                             
                     #  STORE CENTER POSTION 
@@ -567,7 +706,6 @@ def get_3d_positions_and_dimensions(args,cap, netout, neural_net):
         
 #
 #                 
-
 
 def compute_distance_matrix(cap):
     if len(cap.object_center_positions)!=0:
@@ -586,15 +724,17 @@ def compute2dboxes(args,cap, netout,neural_net):
         cap[i].detecs = []
         cap[i].object_2d_boxes = []
         cap[i].object_2d_centers = []
-        if len(netout[i]['class_ids']) != 0:
+        outlength = len(netout[i])
+        if outlength != 0:
             detecs = format_detection(netout[i])
             cap[i].detecs = get_desired_categories(detecs, neural_net.obj_cat_id)
 
             if len(cap[i].detecs) > 0:
-                get_2d_boxes(args, cap[i], neural_net.input_size, args.max_number_objects)
+                get_2d_boxes(args, cap[i], neural_net.input_size,neural_net.netshape, args.max_number_objects)
             else:
                 cap[i].object_2d_boxes = []
                 cap[i].object_2d_centers = []
+
 
 
 def displayloop(args,cap):
@@ -620,7 +760,23 @@ def displayloop(args,cap):
                 set_windows(args)
                 break
 #########################################################################################################
-                
+
+def splitimage(img,splits):
+    overlap = args.overlap
+    hstart = np.arange(0 , img.shape[1] , int(img.shape[1]/splits)) - overlap
+    hstart[0] = 0
+    vstart = np.arange(0 , img.shape[0] , int(img.shape[0]/splits)) - overlap
+    vstart[0] = 0
+    hend = hstart + int(img.shape[1]/splits) + overlap
+    vend = vstart + int(img.shape[0]/splits) + overlap
+    imlist=[]
+    for i in range(splits):
+       for j in range(splits):
+           imlist.append(img[vstart[i]:vend[i],hstart[j]:hend[j],:])
+
+    return imlist
+
+
 def detectionloop(args,cap,neural_net,database):
 
     frameCounter=0
@@ -633,7 +789,7 @@ def detectionloop(args,cap,neural_net,database):
 
 
     if args.thread:
-        barrier1 =threading.Barrier(1   + len(cap)  if not args.justdetec else 1 + 1 , timeout = 5 )
+        barrier1 = threading.Barrier(1   + len(cap)  if not args.justdetec else 1 + 1 , timeout = 5 )
         barrier2 = threading.Barrier(1   + len(cap)  if not args.justdetec else 1 + 1 , timeout = 5 )
 
     else :
@@ -646,9 +802,14 @@ def detectionloop(args,cap,neural_net,database):
         netimages=[]
         for i in range(len(cap)):
 
-            leftimage,rightimage=cap[i].get_rectified_left_right()
+            if args.justdetec and not args.rectify:
+                leftimage, rightimage = cap[i].get_left_right()
+            else:
+                leftimage,rightimage=cap[i].get_rectified_left_right()
+            #netimage = cap[i].net_get_rectified_left()
             cap[i].image_data , cap[i].right_image_data = leftimage,rightimage
-            cap[i].image_to_display = np.copy(leftimage.astype(np.uint8)) 
+            cap[i].image_to_display = np.copy(leftimage.astype(np.uint8))
+            #cap[i].image_to_display = np.copy(netimage.astype(np.uint8))
             cap[i].disparity_to_display=np.zeros_like(leftimage)
 
 
@@ -656,41 +817,42 @@ def detectionloop(args,cap,neural_net,database):
                 q_thread_imagesstereo[i].get()
             q_thread_imagesstereo[i].put(np.copy([leftimage,rightimage]))
             
-            netimages.append(np.copy(leftimage[..., ::-1]))  #to rgb
-        
+            #netimages.append(np.copy(leftimage[..., ::-1]))  #to rgb
+            netimages.append(np.copy(leftimage))  #
+            #netimages.append(np.copy(netimage))  #
+
         q_thread_imagesnet.put(netimages)
 
 
     def imageloop():
         while not globalvar.stopthread_images:
             fetch_images()
-            barrier1.wait()
+            #barrier1.wait()
                 
     ################################################  
             
             
     def fetch_stereo(cap, q_thread_imagesstereo, q_thread_cloud):
-
-        image_data, right_image_data=q_thread_imagesstereo.get(block=True,timeout=5)
+        
+        image_data, right_image_data=q_thread_imagesstereo.get(block=True,timeout=15)
         cloud, disparity_to_display = cap.get_pointcloud(image_data, right_image_data)
-        #cap.cloud, cap.disparity_to_display = cap.get_pointcloud(image_data, right_image_data)
         q_thread_cloud.put([cloud, disparity_to_display])
 
 
     def stereoloop(cap, q_thread_imagesstereo, q_thread_cloud):
         while not globalvar.stopthread_stereo:
-            barrier1.wait()
+            #barrier1.wait()
             t  = time.time()
             fetch_stereo(cap, q_thread_imagesstereo, q_thread_cloud)
             globalvar.stereotime = np.int((time.time()-t)*1000)
-            barrier2.wait()
+            #barrier2.wait()
         
 
     ################################################
 
     def fetch_net(q_thread_imagesnet, q_thread_net, neural_net):
     
-        netimages=q_thread_imagesnet.get(block=True,timeout=5)
+        netimages=q_thread_imagesnet.get(block=True,timeout=15)
         netout = neural_net.get_detection(netimages)
         q_thread_net.put(netout)
 
@@ -698,14 +860,13 @@ def detectionloop(args,cap,neural_net,database):
     def netloop(q_thread_imagesnet, q_thread_net, neural_net):
         while not globalvar.stopthread_net:
             
-            barrier1.wait()
+            #barrier1.wait()
             fetch_net(q_thread_imagesnet, q_thread_net, neural_net)
-            barrier2.wait()
+            #barrier2.wait()
 
         
 
     ################################################
-
 
     #define threads        
     thread_images=threading.Thread(target=imageloop)
@@ -717,10 +878,10 @@ def detectionloop(args,cap,neural_net,database):
  
     thread_net=threading.Thread(target=netloop, args=(q_thread_imagesnet,q_thread_net, neural_net))
 
-    #  prefetch
+    # #  prefetch
     # fetch_images()
     # for i in range(len(cap)):
-    #    fetch_stereo(cap[i], q_thread_imagesstereo[i], q_thread_cloud[i])
+    #     fetch_stereo(cap[i], q_thread_imagesstereo[i], q_thread_cloud[i])
     # fetch_net(q_thread_imagesnet, q_thread_net, neural_net)
     # fetch_images()
 
@@ -731,12 +892,13 @@ def detectionloop(args,cap,neural_net,database):
         thread_images.start()              
         for i in range(len(cap)):
             if not args.justdetec : thread_stereo[i].start()  
-        thread_net.start()      
+        thread_net.start()
 
 #
     avgtotalfps = 0
     count = 0
-    show = 0
+    if globalvar.stereoFps is None:
+        globalvar.stereoFps = FpsCatcher(autoStart=False)
     while True:
 
             tt = time.time()
@@ -746,30 +908,27 @@ def detectionloop(args,cap,neural_net,database):
             #  DATABASE GET FRAME ID
 #            frame_id = store_frame(database, cap[cam_id].sn)
             
-            if not args.thread : fetch_images()    
+            if not args.thread : fetch_images()
 
 
             # GET NET OUT
             if not args.thread :
                 fetch_net(q_thread_imagesnet, q_thread_net, neural_net)
-            netout=q_thread_net.get(block=True,timeout=5)
+            netout=q_thread_net.get(block=True,timeout=50)
 
             # GET CLOUD
-            if not args.justdetec :
+            now = FpsCatcher.currentMilliTime()
+            t = time.time()
+            if not args.justdetec and count % args.hold_for ==0:
                 for i in range(len(cap)):
                     if not args.thread :
-                        t = time.time()
                         fetch_stereo(cap[i], q_thread_imagesstereo[i], q_thread_cloud[i])
-                        globalvar.stereotime = np.int((time.time()-t)*1000)
-                    cap[i].cloud, cap[i].disparity_to_display = q_thread_cloud[i].get(block=True,timeout=5)
+                    cap[i].cloud, cap[i].disparity_to_display = q_thread_cloud[i].get(block=True,timeout=15)
+            globalvar.stereotime = np.int((time.time()-t)*1000)
+            current = FpsCatcher.currentMilliTime()
+            globalvar.stereoFps.compute(current - now)
 
-            # t = time.time()
-            # pool = ThreadPool(16)
-            # pool.starmap(fetch_stereo, [(cap[i], q_thread_imagesstereo[i], q_thread_cloud[i]) for i in range(len(cap))] )
-            # globalvar.stereotime = np.int((time.time()-t)*1000)
-
-
-            if args.thread : barrier2.wait()
+            #if args.thread : barrier2.wait()
 
 
             # GET POSITION
@@ -787,30 +946,19 @@ def detectionloop(args,cap,neural_net,database):
 
             ####################################################################
             # DISPLAY FINAL IMAGE AND RECORD VIDEO
-            t = time.time()
-            # key = cv2.waitKey(3)
-            # if key == ord('s'):
-            #     show = max((1, show + 1))
-            # elif key == ord('q'):
-            #     show = min((0, show - 1))
-            #     set_windows(args)
-            #     for i in range(len(cap)):
-            #         cap[i].image_to_display = np.zeros_like(cap[i].image_to_display)
-            #     display_and_record(args,cap)
-            if show == 0: display_and_record(args, cap)
-            display = np.int((time.time() - t) * 1000)
-
-            totaltime = np.int((time.time() - tt) * 1000)
+            t  = time.time()
+            display_and_record(args,cap)
+            display = np.int((time.time()-t)*1000)
+                        
+            totaltime = np.int((time.time()-tt)*1000)
 
             avgtotalfps = (avgtotalfps * count + 1000/totaltime) / (count+1)
             count+=1
 
             frameCounter=frameCounter+1
-            if not args.justdetec :
-                print(f'NET {np.int(globalvar.detectionFps.getFps()):3d} FPS) / STEREO : {np.int(globalvar.stereoFps.getFps()):3d} FPS ')
-                print(f'net time {globalvar.nettime :3d} /  stereo {globalvar.stereotime:3d} / preprocessing {globalvar.prepro:3d} /  positions {posi:3d} /  WRITE {write:3d} /  write {display:3d} / total time : {totaltime:3d} / GLOBAL FPS : {np.int(avgtotalfps):3d} ')
-            else :
-                print(f'NET {np.int(globalvar.detectionFps.getFps()):3d} FPS / net time {globalvar.nettime :3d} / preprocessing {globalvar.prepro:3d}')
+            print(f'NET {np.int(globalvar.detectionFps.getFps()):3d} FPS) / STEREO : {np.int(globalvar.stereoFps.getFps()):3d} FPS ')
+            print(f'net time {globalvar.nettime :3d} /  stereo {globalvar.stereotime:3d} / preprocessing {globalvar.prepro:3d} /  positions {posi:3d} /  WRITE {write:3d} /  write {display:3d} / total time : {totaltime:3d} / GLOBAL FPS : {np.int(avgtotalfps):3d} ')
+
 
 
 ################################################################################################################
